@@ -3,6 +3,9 @@ FROM golang:1.21.6-bookworm@sha256:c4b696f1b2bf7d42e02b62b160c3f81c39386e1c56760
 ENV KUBECTL_VERSION="v1.28.3"
 ENV HELM_VERSION="v3.13.1"
 
+ADD build_ca_certificate /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
 RUN go install github.com/onsi/ginkgo/v2/ginkgo@v2.1.6
 RUN wget -q https://storage.googleapis.com/kubernetes-release/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl -O /usr/local/bin/kubectl && \
     chmod +x /usr/local/bin/kubectl && \
@@ -24,6 +27,9 @@ RUN apk add -U --no-cache \
     tzdata \
     libc6-compat \
     openssl
+
+ADD build_ca_certificate /usr/local/share/ca-certificates/
+RUN update-ca-certificates
 
 COPY --from=builder /go/bin/ginkgo /usr/local/bin/
 COPY --from=builder /usr/local/bin/kubectl /usr/local/bin/

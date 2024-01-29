@@ -26,6 +26,10 @@ Building the operator binary and docker image:
 ```shell
 make build
 make docker.build IMAGE_NAME=external-secrets IMAGE_TAG=latest
+# make test
+# kind create cluster --name external-secrets
+# make test.e2e GINKGO_LABELS=conjur
+# kind delete cluster -n external-secrets
 ```
 
 Run tests and lint the code:

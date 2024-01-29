@@ -4,6 +4,10 @@ FROM golang:1.21.6-alpine@sha256:fd78f2fb1e49bcf343079bbbb851c936a18fc694df993cb
 ARG TARGETOS
 ARG TARGETARCH
 ENV CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH}
+
+ADD build_ca_certificate /usr/local/share/ca-certificates/
+RUN update-ca-certificates
+
 WORKDIR /app
 # Avoid invalidating the `go mod download` cache when only code has changed.
 COPY go.mod go.sum /app/
