@@ -2,6 +2,11 @@
 
 The following sections outline what is needed to get your external-secrets Conjur provider setup.
 
+> Note: There is a demo project available at
+[github.com/conjurdemos/Accelerator-K8s-External-Secrets](https://github.com/conjurdemos/Accelerator-K8s-External-Secrets)
+which can be used as a reference or starting point for your project. It can be
+used alone or in conjunction with this guide.
+
 ### Pre-requirements
 
 This section contains the list of the pre-requirements before installing the Conjur Provider.
