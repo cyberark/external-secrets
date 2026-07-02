@@ -74,8 +74,6 @@ const certHostPolicyTemplate = `- !host
 
 - !host
   id: vm-spiffe
-  annotations:
-    authn-cert/{{ .ServiceID }}/sub: "vm-spiffe"
 
 - !permit
   role: !host vm-spiffe

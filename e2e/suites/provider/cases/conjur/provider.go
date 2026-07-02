@@ -221,8 +221,8 @@ func (s conjurProvider) CreateCertStore() {
 			Namespace: s.framework.Namespace.Name,
 		},
 		Data: map[string][]byte{
-			"clientCert": s.addon.ClientCert,
-			"clientKey":  s.addon.ClientKey,
+			"clientCert": s.addon.ClientCertSPIFFE,
+			"clientKey":  s.addon.ClientKeySPIFFE,
 		},
 	}
 	err := s.framework.CRClient.Create(GinkgoT().Context(), certSecret)

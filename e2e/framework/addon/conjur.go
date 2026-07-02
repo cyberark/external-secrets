@@ -18,14 +18,19 @@ package addon
 
 import (
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
+	"net/url"
 	"path/filepath"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -46,11 +51,13 @@ type Conjur struct {
 	ConjurClient *conjurapi.Client
 	ConjurURL    string
 
-	AdminApiKey    string
-	ConjurServerCA []byte
-	ClientCert     []byte
-	ClientKey      []byte
-	portForwarder  *PortForward
+	AdminApiKey      string
+	ConjurServerCA   []byte
+	ClientCert       []byte
+	ClientKey        []byte
+	ClientCertSPIFFE []byte
+	ClientKeySPIFFE  []byte
+	portForwarder    *PortForward
 }
 
 func NewConjur() *Conjur {
@@ -89,6 +96,19 @@ func NewConjur() *Conjur {
 		Bytes: x509.MarshalPKCS1PrivateKey(clientKeyRSA),
 	})
 
+	// Generate SPIFFE client cert with SAN URI for SPIFFE-mode cert authentication.
+	// The URI must match spiffe://{trust-domain}/{identity-path}/{host-id} where
+	// trust-domain=conjur.test and identity-path=conjur/authn-cert/eso-tests.
+	spiffeURI := &url.URL{Scheme: "spiffe", Host: "conjur.test", Path: "/conjur/authn-cert/eso-tests/vm-spiffe"}
+	clientCertSPIFFEPem, clientKeySPIFFERSA, err := genSpiffePeerCert(rootCert, rootKey, "vm-spiffe", spiffeURI)
+	if err != nil {
+		Fail(fmt.Sprintf("unable to generate SPIFFE client cert: %v", err))
+	}
+	clientKeySPIFFEPem := pem.EncodeToMemory(&pem.Block{
+		Type:  privatePemType,
+		Bytes: x509.MarshalPKCS1PrivateKey(clientKeySPIFFERSA),
+	})
+
 	return &Conjur{
 		dataKey: dataKey,
 		chart: &HelmChart{
@@ -116,9 +136,11 @@ func NewConjur() *Conjur {
 				},
 			},
 		},
-		Namespace:  "conjur",
-		ClientCert: clientCertPem,
-		ClientKey:  clientKeyPem,
+		Namespace:        "conjur",
+		ClientCert:       clientCertPem,
+		ClientKey:        clientKeyPem,
+		ClientCertSPIFFE: clientCertSPIFFEPem,
+		ClientKeySPIFFE:  clientKeySPIFFEPem,
 	}
 }
 
@@ -252,17 +274,29 @@ func (l *Conjur) configureConjur() error {
   id: conjur/authn-cert/eso-tests
   body:
     - !webservice
-    - !variable ca/cert`
+    - !variable ca/cert
+    - !variable host-mode
+    - !variable trust-domain
+    - !variable identity-path`
 
 	_, err = l.ConjurClient.LoadPolicy(conjurapi.PolicyModePost, "root", strings.NewReader(policy))
 	if err != nil {
 		return fmt.Errorf("unable to load authn-cert policy: %w", err)
 	}
 
-	// Set the CA certificate for the authn-cert authenticator
-	err = l.ConjurClient.AddSecret("conjur/authn-cert/eso-tests/ca/cert", string(l.ConjurServerCA))
-	if err != nil {
-		return fmt.Errorf("unable to set authn-cert ca cert: %w", err)
+	// Set the CA certificate and SPIFFE mode variables for the authn-cert authenticator.
+	// host-mode=spiffe enables SPIFFE URI matching instead of CN-based matching.
+	// Conjur derives the host identity by stripping spiffe://{trust-domain}/{identity-path}/ from the SAN URI.
+	certSecrets := map[string]string{
+		"conjur/authn-cert/eso-tests/ca/cert":       string(l.ConjurServerCA),
+		"conjur/authn-cert/eso-tests/host-mode":     "spiffe",
+		"conjur/authn-cert/eso-tests/trust-domain":  "conjur.test",
+		"conjur/authn-cert/eso-tests/identity-path": "conjur/authn-cert/eso-tests",
+	}
+	for secretPath, secretValue := range certSecrets {
+		if err := l.ConjurClient.AddSecret(secretPath, secretValue); err != nil {
+			return fmt.Errorf("unable to set authn-cert variable %s: %w", secretPath, err)
+		}
 	}
 
 	// Fetch the jwks info from the k8s cluster
@@ -370,6 +404,36 @@ func (l *Conjur) Uninstall() error {
 
 func (l *Conjur) Setup(cfg *Config) error {
 	return l.chart.Setup(cfg)
+}
+
+// genSpiffePeerCert generates a client certificate with a SPIFFE SAN URI for SPIFFE-mode
+// cert authentication. The URI is embedded in the certificate's Subject Alternative Names.
+func genSpiffePeerCert(signingCert *x509.Certificate, signingKey *rsa.PrivateKey, cn string, spiffeURI *url.URL) ([]byte, *rsa.PrivateKey, error) {
+	return genPeerCertWithURIs(signingCert, signingKey, cn, []*url.URL{spiffeURI})
+}
+
+func genPeerCertWithURIs(signingCert *x509.Certificate, signingKey *rsa.PrivateKey, cn string, uris []*url.URL) ([]byte, *rsa.PrivateKey, error) {
+	pkey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, nil, err
+	}
+	tpl := x509.Certificate{
+		Subject: pkix.Name{
+			Country:      []string{"/dev/null"},
+			Organization: []string{"External Secrets ACME"},
+			CommonName:   cn,
+		},
+		SerialNumber:   big.NewInt(2),
+		NotBefore:      time.Now(),
+		NotAfter:       time.Now().Add(time.Hour),
+		KeyUsage:       x509.KeyUsageCRLSign,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		IsCA:           false,
+		MaxPathLenZero: true,
+		URIs:           uris,
+	}
+	_, certPEM, err := genCert(&tpl, signingCert, &pkey.PublicKey, signingKey)
+	return certPEM, pkey, err
 }
 
 func generateConjurDataKey() string {
